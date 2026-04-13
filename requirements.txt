@@ -1,0 +1,18 @@
+# ADF Report Generator — Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Azure SDK
+azure-identity>=1.15.0
+azure-mgmt-datafactory>=4.0.0
+
+# Data processing
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# HTTP & config
+requests>=2.31.0
+pyyaml>=6.0.1
+python-dateutil>=2.8.2
+
+# Timezone (optional — improves Windows TZ resolution coverage)
+# tzdata>=2024.1
