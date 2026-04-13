@@ -6,10 +6,11 @@ Python automation scripts for Microsoft Azure platform operations, data engineer
 
 ## 📋 Scripts
 
-| Script | Description |
-|--------|-------------|
-| [`adf_report_generator.py`](#adf_report_generatorpy) | Multi-sheet Excel report: ADF pipeline parent-child relationships, trigger schedules, and 45-day run history |
-| [`adf_linked_service_inventory.py`](#adf_linked_service_inventorypy) | Maps every ADF linked service to its datasets, pipelines, Key Vault dependencies, and trigger schedules |
+| Script | Description | Auth |
+|--------|-------------|------|
+| [`adf_report_generator.py`](#adf_report_generatorpy) | ADF pipeline parent-child relationships, trigger schedules, 45-day run history | DefaultAzureCredential |
+| [`adf_linked_service_inventory.py`](#adf_linked_service_inventorypy) | Maps every ADF linked service to datasets, pipelines, and Key Vault dependencies | AzureCliCredential |
+| [`adls_acl_extractor.py`](#adls_acl_extractorpy) | Recursively scans ADLS Gen2 to find all paths where a Managed Identity has ACL entries | AzureCliCredential |
 
 ---
 
@@ -17,7 +18,7 @@ Python automation scripts for Microsoft Azure platform operations, data engineer
 
 ### What it does
 
-Connects to an Azure Data Factory instance and generates a three-sheet Excel report:
+Generates a three-sheet Excel report for an Azure Data Factory instance:
 
 | Sheet | Contents |
 |-------|----------|
@@ -27,12 +28,12 @@ Connects to an Azure Data Factory instance and generates a three-sheet Excel rep
 
 ### Key features
 
-- **Recursive activity walker** — handles arbitrarily deep nesting of ForEach, IfCondition, Until, and Switch activities to find all ExecutePipeline calls
-- **Parallel run fetching** — fetches run history for all pipelines concurrently using a configurable thread pool with per-thread rate limiting (5 req/sec)
-- **Smart token management** — proactively refreshes Azure bearer tokens 5 minutes before expiry
-- **Exponential backoff retry** — handles HTTP 429, 503, 401 with configurable retries and Retry-After header support
-- **Multi-timezone schedule display** — converts trigger schedule times from source timezone to target timezone with full DST awareness
-- **Optimised API usage** — fetches only the latest run per pipeline rather than paginating full history
+- **Recursive activity walker** — handles arbitrarily deep nesting of ForEach, IfCondition, Until, and Switch activities
+- **Parallel run fetching** — concurrent thread pool with per-thread rate limiting (5 req/sec) to stay within ARM throttle limits
+- **Smart token management** — proactively refreshes bearer tokens 5 minutes before expiry
+- **Exponential backoff retry** — handles HTTP 429 / 503 / 401 with Retry-After header support
+- **Multi-timezone schedule display** — converts trigger times from source timezone to target timezone with DST awareness
+- **Optimised API usage** — fetches only the latest run per pipeline (first page, ordered DESC)
 
 ### Architecture
 
@@ -40,36 +41,23 @@ Connects to an Azure Data Factory instance and generates a three-sheet Excel rep
 main()
  └─ build_reports()
      ├─ [1/5] fetch_all_pipeline_definitions_batch()
-     │         list_by_factory() → .get() per pipeline (full nested activities)
+     │         list_by_factory() → .get() per pipeline (loads full nested activities)
      ├─ [2/5] walk_activities()  [recursive]
      │         ExecutePipeline → parent-child edge
-     │         ForEach / IfCondition / Until / Switch → recurse
+     │         ForEach / IfCondition / Until / Switch → recurse into branches
      ├─ [3/5] triggers.list_by_factory() + extract_schedule_details()
      ├─ [4/5] fetch_runs_parallel_with_limit()
-     │         query_pipeline_runs_optimized()  [threaded, rate-limited]
-     └─ [5/5] Assemble DataFrames → write Excel
+     │         query_pipeline_runs_optimized()  [threaded + rate-limited]
+     └─ [5/5] Assemble DataFrames → write Excel (3 sheets)
 ```
 
 ### Usage
 
 ```bash
-# Basic run with config file
-python adf_report_generator.py -c config.yaml
-
-# Parallel mode — recommended for factories with 50+ pipelines
 python adf_report_generator.py -c config.yaml --parallel
-
-# Custom output and lookback window
 python adf_report_generator.py -c config.yaml --parallel -o report.xlsx -d 30
-
-# Load config from environment variables
-python adf_report_generator.py --env --parallel
-
-# Verbose per-pipeline output
-python adf_report_generator.py -c config.yaml --parallel -v
+python adf_report_generator.py --env --parallel -v
 ```
-
-### Arguments
 
 | Argument | Default | Description |
 |----------|---------|-------------|
@@ -77,7 +65,7 @@ python adf_report_generator.py -c config.yaml --parallel -v
 | `--env` | — | Load config from environment variables |
 | `-o, --out` | `ADF_Pipeline_Report.xlsx` | Output file path |
 | `-d, --days` | `45` | Run history lookback in days |
-| `--parallel` | off | Enable parallel run fetching |
+| `--parallel` | off | Enable parallel run fetching (recommended) |
 | `--max-workers` | `6` | Parallel thread count |
 | `-v, --verbose` | off | Per-pipeline status output |
 
@@ -87,7 +75,7 @@ python adf_report_generator.py -c config.yaml --parallel -v
 
 ### What it does
 
-Enumerates every linked service in an ADF instance and maps it to its full dependency graph — datasets, pipelines, Key Vault credentials, and trigger schedules.
+Enumerates every linked service in an ADF instance and maps its full dependency graph:
 
 | Sheet | Contents |
 |-------|----------|
@@ -97,45 +85,30 @@ Enumerates every linked service in an ADF instance and maps it to its full depen
 ### Key features
 
 - **Full dependency chain** — traces LS → dataset → pipeline in both directions
-- **Key Vault dependency detection** — identifies which linked services retrieve credentials from Key Vault and propagates pipeline associations to the KV LS
+- **Key Vault dependency detection** — identifies which linked services retrieve credentials from Key Vault and propagates pipeline associations to the KV linked service
 - **Direct activity LS references** — catches pipelines that reference linked services directly (bypassing datasets) via `linkedServiceName` on Copy, Lookup, GetMetadata activities
-- **Trigger schedule enrichment** — annotates pipeline associations with active trigger schedule metadata (frequency, interval, timezone, recurrence days/hours)
-- **Multi-type support** — handles AzureBlobStorage, AzureDataLakeStore, AzureSqlDatabase, Oracle, AzureKeyVault, and others gracefully
+- **Trigger schedule enrichment** — annotates pipeline associations with active trigger metadata (frequency, interval, timezone, recurrence pattern)
+- **Multi-type support** — handles AzureBlobStorage, ADLS, AzureSqlDatabase, Oracle, AzureKeyVault, and others
 
 ### Architecture
 
 ```
 main()
- ├─ [1/6] build_linked_service_map()
- │         Enumerates LS, extracts connection URLs, detects KV dependencies
- ├─ [2/6] attach_datasets()
- │         Maps datasets → parent LS, extracts container + folder metadata
- ├─ [3/6] attach_pipeline_references()
- │         Scans all activities for direct LS refs + dataset-mediated refs
- ├─ [4/6] build_trigger_schedule_map()
- │         Builds pipeline → schedule metadata map (started triggers only)
+ ├─ [1/6] build_linked_service_map()     Enumerate LS, extract URLs, detect KV deps
+ ├─ [2/6] attach_datasets()              Map datasets → parent LS + container/folder metadata
+ ├─ [3/6] attach_pipeline_references()   Scan activities for direct + dataset-mediated LS refs
+ ├─ [4/6] build_trigger_schedule_map()   Pipeline → schedule metadata (started triggers only)
  ├─ [5/6] enrich_pairs_with_schedule()
  │         + propagate_keyvault_pipeline_refs()
- └─ [6/6] build_sheet1() + build_sheet2() → write Excel
+ └─ [6/6] build_sheet1() + build_sheet2() → write Excel (2 sheets)
 ```
 
 ### Usage
 
 ```bash
-# Default (reads ~/config.yaml)
-python adf_linked_service_inventory.py
-
-# Explicit config path
-python adf_linked_service_inventory.py --config path/to/config.yaml
-
-# Load from environment variables
-python adf_linked_service_inventory.py --env
-
-# Custom output path
-python adf_linked_service_inventory.py -o my_inventory.xlsx
+python adf_linked_service_inventory.py -c config.yaml
+python adf_linked_service_inventory.py --env -o my_inventory.xlsx
 ```
-
-### Arguments
 
 | Argument | Default | Description |
 |----------|---------|-------------|
@@ -145,12 +118,107 @@ python adf_linked_service_inventory.py -o my_inventory.xlsx
 
 ---
 
+## adls_acl_extractor.py
+
+### What it does
+
+Recursively scans an ADLS Gen2 container and extracts every path where a specific
+Managed Identity (or Service Principal) has an explicit ACL entry.
+
+Output: CSV file with columns:
+
+| Column | Description |
+|--------|-------------|
+| `storage_account` | Storage account name |
+| `container` | Container (filesystem) name |
+| `path` | Full path of the scanned object |
+| `object_type` | `file`, `directory`, or `container-root` |
+| `principal_id` | Object ID GUID of the matched identity |
+| `principal_type` | `user` or `group` |
+| `permissions` | Normalised: `R`, `R,W`, `R,W,X`, `-` etc. |
+| `is_default` | `True` if this is a default (inherited) ACE |
+
+### Key features
+
+- **Full recursive scan** — traverses all directories and files via `get_paths(recursive=True)`
+- **Four-tier MSI resolution** — accepts Object ID GUID, UAMI name, `name|resourceGroup`, or SP display name
+- **Optional mask and special entries** — `--include-mask` and `--include-special` add effective permission context at matched paths
+- **Depth limiting** — `--max-depth N` caps recursion for large containers
+- **Graceful error handling** — HTTP errors and permission-denied paths are skipped and counted, not fatal
+- **Azure SDK log suppression** — verbose SDK INFO/WARNING logs silenced during scan for clean progress output
+
+### Use cases
+
+- Audit all paths where an MSI has been granted access (pre/post migration validation)
+- Identify over-privileged identities across deep folder hierarchies
+- Support access reviews and zero-trust governance for ADLS Gen2
+- Generate evidence for security compliance reviews
+
+### Architecture
+
+```
+main()
+ ├─ resolve_msi_to_principal_id()   4-tier: GUID → identity show → identity list → sp list
+ ├─ DataLakeServiceClient connect
+ └─ scan loop
+     ├─ do_scan("/")                Container root
+     └─ for item in get_paths(recursive=True):
+             scan_path_for_principal()
+               └─ get_access_control() → parse_acl_entries() → filter by principal_id
+ └─ csv.DictWriter → output CSV
+```
+
+### Usage
+
+```bash
+# Interactive — prompts for all inputs
+python adls_acl_extractor.py --interactive
+
+# Non-interactive
+python adls_acl_extractor.py \
+  --storage-account mystorageaccount \
+  --container mycontainer \
+  --msi my-managed-identity-name
+
+# Provide Object ID directly (fastest resolution)
+python adls_acl_extractor.py \
+  --storage-account mystorageaccount \
+  --container mycontainer \
+  --msi xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+# Include mask and special entries at matched paths
+python adls_acl_extractor.py ... --include-mask --include-special
+
+# Directories only, max 3 levels deep
+python adls_acl_extractor.py ... --exclude-files --max-depth 3
+
+# Scan a specific path only
+python adls_acl_extractor.py ... --path /raw/folder1
+```
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--storage-account` | — | Storage account name |
+| `--container` | — | Container (filesystem) name |
+| `--msi` | — | MSI name or Object ID GUID |
+| `--path` | — | Scan specific path only |
+| `--root-only` | off | Scan container root only |
+| `--exclude-files` | off | Skip files, scan directories only |
+| `--max-depth` | 0 (unlimited) | Maximum recursion depth |
+| `--output` | auto-generated | Output CSV path |
+| `--include-mask` | off | Include mask entries at matched paths |
+| `--include-special` | off | Include owning user/group/other at matched paths |
+| `--debug` | off | Verbose debug output |
+| `--interactive` | off | Prompt for inputs interactively |
+
+---
+
 ## ⚙️ Setup
 
 ### Prerequisites
 
 - Python 3.9+
-- Azure CLI (`az`) installed and logged in — `az login`
+- Azure CLI (`az`) installed and authenticated — run `az login`
 
 ### Install dependencies
 
@@ -158,54 +226,40 @@ python adf_linked_service_inventory.py -o my_inventory.xlsx
 pip install -r requirements.txt
 ```
 
-### Configure
-
-**Option A — Config file**
+### Configure (for ADF scripts)
 
 ```bash
 cp config.yaml.example config.yaml
 # Edit config.yaml — fill in subscription_id, resource_group, factory_name
 ```
 
-**Option B — Environment variables**
+Or use environment variables:
 
 ```bash
 cp .env.example .env
-# Edit .env — then run scripts with --env flag
-```
-
-### Authenticate
-
-```bash
-# Azure CLI (simplest for local development)
-az login
-
-# Or set Service Principal credentials
-export AZURE_CLIENT_ID=<your-client-id>
-export AZURE_CLIENT_SECRET=<your-client-secret>
-export AZURE_TENANT_ID=<your-tenant-id>
-# Then change AzureCliCredential() to DefaultAzureCredential() in the script
+# Edit .env — then pass --env flag to scripts
 ```
 
 ---
 
 ## 🔐 Security
 
-Credentials are never hardcoded. All sensitive values load from `config.yaml` or environment variables — both excluded from Git via `.gitignore`. The `.gitignore` in this repo also excludes `*.xlsx`, `*.csv`, and output files that could contain real Azure resource names or pipeline data.
+Credentials are never hardcoded. All sensitive values (subscription IDs, resource group names, factory names) are loaded from `config.yaml` or environment variables — both excluded from Git via `.gitignore`. Output files (`*.xlsx`, `*.csv`) are also excluded since they may contain real Azure resource names and pipeline data.
 
 ---
 
 ## 📦 Dependencies
 
-| Package | Purpose |
-|---------|---------|
-| `azure-identity` | AzureCliCredential / DefaultAzureCredential |
-| `azure-mgmt-datafactory` | ADF management API client |
-| `pandas` | DataFrame assembly and Excel writing |
-| `openpyxl` | Excel file engine |
-| `requests` | Direct ARM REST API calls (adf_report_generator) |
-| `pyyaml` | Config file parsing |
-| `python-dateutil` | Datetime string parsing |
+| Package | Scripts | Purpose |
+|---------|---------|---------|
+| `azure-identity` | all | AzureCliCredential / DefaultAzureCredential |
+| `azure-mgmt-datafactory` | adf_report_generator, adf_linked_service_inventory | ADF management API |
+| `azure-storage-file-datalake` | adls_acl_extractor | ADLS Gen2 filesystem + ACL access |
+| `pandas` | adf_report_generator, adf_linked_service_inventory | DataFrame assembly + Excel writing |
+| `openpyxl` | adf_report_generator, adf_linked_service_inventory | Excel file engine |
+| `requests` | adf_report_generator | Direct ARM REST API calls |
+| `pyyaml` | adf scripts | Config file parsing |
+| `python-dateutil` | adf_report_generator | Datetime string parsing |
 
 ---
 
@@ -215,6 +269,7 @@ Credentials are never hardcoded. All sensitive values load from `config.yaml` or
 azure-python-automation/
 ├── adf_report_generator.py          # Pipeline report: parent-child, triggers, run history
 ├── adf_linked_service_inventory.py  # Linked service dependency mapper
+├── adls_acl_extractor.py            # ADLS Gen2 Managed Identity ACL scanner
 ├── config.yaml.example              # Config template (copy to config.yaml)
 ├── .env.example                     # Env var template (copy to .env)
 ├── requirements.txt                 # Python dependencies
@@ -227,9 +282,9 @@ azure-python-automation/
 ## 📜 Related certifications
 
 These scripts apply concepts covered in:
-- **AZ-104** — Azure resource management, subscription/resource group structure
-- **AZ-500** — Managed Identities, RBAC, Key Vault, DefaultAzureCredential patterns
-- **DP-900** — Azure Data Factory architecture, linked services, datasets, pipelines
+- **AZ-104** — Azure resource management, storage accounts, subscription/RG structure
+- **AZ-500** — Managed Identities, RBAC, ADLS Gen2 ACLs, Key Vault, zero-trust architecture
+- **DP-900** — Azure Data Factory, linked services, datasets, pipelines
 
 ---
 
