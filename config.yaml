@@ -1,15 +1,19 @@
-# ADF Report Generator — Configuration File
-# ==========================================
-# Copy this file and fill in your values.
-# NEVER commit the filled-in version to Git.
-# Add config.yaml to your .gitignore.
+# ADF Automation Scripts — Configuration File
+# ============================================
+# Works with:
+#   - adf_report_generator.py
+#   - adf_linked_service_inventory.py
+#
+# HOW TO USE:
+#   1. Copy this file:  cp config.yaml.example config.yaml
+#   2. Fill in your real values in config.yaml
+#   3. NEVER commit config.yaml to Git — it is in .gitignore
+#
+# WHERE TO FIND THESE VALUES:
+#   subscription_id : az account show --query id -o tsv
+#   resource_group  : Azure Portal → your ADF → Resource group (top right)
+#   factory_name    : Azure Portal → your ADF → name in the top left
 
-# Your Azure subscription ID
-# Find it: az account show --query id -o tsv
 subscription_id: YOUR_SUBSCRIPTION_ID_HERE
-
-# Resource group containing your Azure Data Factory
 resource_group: YOUR_RESOURCE_GROUP_HERE
-
-# Name of your Azure Data Factory instance
 factory_name: YOUR_ADF_FACTORY_NAME_HERE
