@@ -1,0 +1,7 @@
+# ADF Config Template
+# Copy this file to config.yaml and fill in your real values
+# NEVER commit config.yaml to Git — it is in .gitignore
+
+subscription_id: YOUR_SUBSCRIPTION_ID_HERE
+resource_group: YOUR_RESOURCE_GROUP_HERE
+factory_name: YOUR_ADF_FACTORY_NAME_HERE
