@@ -1,0 +1,44 @@
+# ── Credentials & config — NEVER commit these ──────────────────────────────
+.env
+config.yaml
+*.pem
+*.key
+*.pfx
+*.p12
+secrets.yaml
+credentials.yaml
+
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env/
+
+# ── Output files — may contain real Azure resource names or run data ────────
+*.xlsx
+*.csv
+*.json
+output/
+reports/
+logs/
+*.log
+
+# ── IDE ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
